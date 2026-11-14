@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace EasyShm;
@@ -29,5 +30,19 @@ public static class SharedMemory
             return UnixSharedMemory<T>.OpenExisting(name, count);
         else
             throw new PlatformNotSupportedException("Only Windows, macOS, and Linux platforms are supported.");
+    }
+
+
+    public static ISharedMemory<T> CreateOrOpen<T>(string name, int count)
+        where T : unmanaged
+    {
+        try
+        {
+            return CreateNew<T>(name, count);
+        }
+        catch (IOException) // The name is already taken.
+        {
+            return OpenExisting<T>(name, count);
+        }
     }
 }

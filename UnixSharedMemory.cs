@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 
 namespace EasyShm;
 
@@ -37,11 +38,12 @@ public sealed class UnixSharedMemory<T> : ISharedMemory<T>
 
     public static UnixSharedMemory<T> CreateNew(string name, int count)
     {
+        name = NormalizeName(name);
         var bytes = ByteSize(count);
 
         var fd = Libc.Open(name, Libc.Create | Libc.Exclusive | Libc.ReadWrite, Libc.Mode0666);
         if (fd == -1)
-            throw new InvalidOperationException($"shm_open failed with errno {Libc.LastError}.");
+            throw Failure(name, Libc.LastError, nameof(Libc.Open));
 
         var ret = Libc.Truncate(fd, bytes);
         if (ret == -1)
@@ -49,7 +51,7 @@ public sealed class UnixSharedMemory<T> : ISharedMemory<T>
             var errno = Libc.LastError;
             Libc.Close(fd);
             Libc.Unlink(name);
-            throw new InvalidOperationException($"ftruncate failed with errno {errno}.");
+            throw Failure(name, errno, nameof(Libc.Truncate));
         }
 
         var ptr = Libc.Map(IntPtr.Zero, bytes, Libc.ProtRead | Libc.ProtWrite, Libc.MapShared, fd);
@@ -58,7 +60,7 @@ public sealed class UnixSharedMemory<T> : ISharedMemory<T>
             var errno = Libc.LastError;
             Libc.Close(fd);
             Libc.Unlink(name);
-            throw new InvalidOperationException($"mmap failed with errno {errno}.");
+            throw Failure(name, errno, nameof(Libc.Map));
         }
 
         return new UnixSharedMemory<T>(fd, ptr, name, count, own: true);
@@ -66,18 +68,19 @@ public sealed class UnixSharedMemory<T> : ISharedMemory<T>
 
     public static UnixSharedMemory<T> OpenExisting(string name, int count)
     {
+        name = NormalizeName(name);
         var bytes = ByteSize(count);
 
         var fd = Libc.Open(name, Libc.ReadWrite, Libc.Mode0666);
         if (fd == -1)
-            throw new InvalidOperationException($"shm_open failed with errno {Libc.LastError}.");
+            throw Failure(name, Libc.LastError, nameof(Libc.Open));
 
         var ptr = Libc.Map(IntPtr.Zero, bytes, Libc.ProtRead | Libc.ProtWrite, Libc.MapShared, fd);
         if (ptr == Libc.MapFailed)
         {
             var errno = Libc.LastError;
             Libc.Close(fd);
-            throw new InvalidOperationException($"mmap failed with errno {errno}.");
+            throw Failure(name, errno, nameof(Libc.Map));
         }
 
         return new UnixSharedMemory<T>(fd, ptr, name, count, own: false);
@@ -104,6 +107,37 @@ public sealed class UnixSharedMemory<T> : ISharedMemory<T>
     }
 
 
+
+    private static Exception Failure(string name, int errno, string call)
+    {
+        var message = $"{call} failed for shared memory '{name}' (errno {errno}).";
+
+        if (errno == Libc.ErrorNameTooLong)
+            return new PathTooLongException(message);
+
+        return errno switch
+        {
+            Libc.ErrorNotFound => new FileNotFoundException(message),
+            Libc.ErrorExists => new IOException(message),
+            Libc.ErrorAccess => new UnauthorizedAccessException(message),
+            Libc.ErrorInvalid => new ArgumentException(message, nameof(name)),
+            Libc.ErrorNoMemory => new OutOfMemoryException(message),
+            _ => new InvalidOperationException(message),
+        };
+    }
+
+    private static string NormalizeName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            throw new ArgumentException("The name must not be empty.", nameof(name));
+
+        var normalized = name[0] == '/' ? name : "/" + name;
+
+        if (normalized.IndexOf('/', 1) >= 0)
+            throw new ArgumentException($"The name '{name}' may not contain a '/' after the leading one.", nameof(name));
+
+        return normalized;
+    }
 
     /// <summary>The region length in bytes, validating <paramref name="count"/> on the way.</summary>
     private static long ByteSize(int count)

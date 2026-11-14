@@ -34,6 +34,13 @@ internal static class Libc
     /// </summary>
     internal static readonly IntPtr MapFailed = new(-1);
 
+    internal const int ErrorNotFound = 2;
+    internal const int ErrorNoMemory = 12;
+    internal const int ErrorAccess = 13;
+    internal const int ErrorExists = 17;
+    internal const int ErrorInvalid = 22;
+    internal static readonly int ErrorNameTooLong = IsMacOS ? 63 : 36;
+
 
     internal static int LastError => Marshal.GetLastWin32Error();
 
